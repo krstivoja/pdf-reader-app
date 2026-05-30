@@ -1,10 +1,11 @@
-# PDF Reader (Mac app)
+# PDF + EPUB Reader (Mac app)
 
-A local audiobook player: drag in a PDF, pick a voice, and it reads the book
+A local audiobook player: drag in a PDF or EPUB, pick a voice, and it reads the book
 aloud using **Kokoro** TTS running on your machine. No cloud, no tokens, no
-uploads. PDF text is extracted in-app with pdf.js; speech comes from a local
-Kokoro server. Imported PDFs are kept in a local library for quick switching,
-with reading progress saved per book.
+uploads. PDF text is extracted in-app with pdf.js; EPUB text is extracted from
+the book's reading-order sections. Speech comes from a local Kokoro server.
+Imported books are kept in a local library for quick switching, with reading
+progress and page or section bookmarks saved per book.
 
 Built with **Tauri v2** (tiny native macOS app, ~3–5 MB) wrapping an
 HTML/JS front-end.
@@ -71,7 +72,7 @@ missing icons.
 npm run dev
 ```
 
-This opens the app in a live window with hot reload. Drag in a PDF and press
+This opens the app in a live window with hot reload. Drag in a PDF or EPUB and press
 Play.
 
 ## 6. Build the distributable Mac app
@@ -99,13 +100,17 @@ npm run tauri build -- --target universal-apple-darwin
 
 - **Scanned PDFs** (image-only, no text layer) extract no text — they need OCR,
   which this version doesn't include. Ask if you want a Tesseract fallback added.
+- **EPUB navigation** uses the book's reflowable reading-order sections instead
+  of fixed pages.
 - **Unsigned app**: the first time you open the built .app, macOS Gatekeeper will
   warn it's from an unidentified developer. Right-click → Open to bypass, or
   sign it with an Apple Developer ID if you plan to distribute.
 - **Voices**: the dropdown auto-populates from Kokoro's `/v1/audio/voices`. The
   `af_*` voices are American female, `am_*` American male, `bf_*`/`bm_*` British.
-- **Local library**: imported PDFs are copied into the app-data directory on
+- **Local library**: imported PDFs and EPUBs are copied into the app-data directory on
   your Mac. Use the sidebar to reopen a book, resume its last page, or remove it.
+- **Bookmarks**: open a book and use the bookmark button to save the visible PDF
+  page or EPUB section. Saved bookmarks appear in the jump menu and thumbnail rail.
 - **CORS / networking**: in the Tauri app, requests go through the HTTP plugin
   (allowed for `localhost:8880` in `src-tauri/capabilities/default.json`). The
   same front-end also runs in a plain browser via `fetch` if you just open
@@ -114,9 +119,9 @@ npm run tauri build -- --target universal-apple-darwin
 ## How it works
 
 ```
-PDF ──pdf.js──> text ──split──> sentences
-                                   │
-                  (for each)  POST /v1/audio/speech ──> MP3 ──> <audio> play
-                                   │
-                          prefetch next sentence while current plays
+PDF  ──pdf.js──────> text ──split──> sentences
+EPUB ──spine XHTML─> text              │
+                      (for each)  POST /v1/audio/speech ──> MP3 ──> <audio> play
+                                         │
+                                prefetch next sentence while current plays
 ```

@@ -1,4 +1,4 @@
-// PDF Reader — local audiobook player using Kokoro TTS
+// PDF + EPUB Reader — local audiobook player using Kokoro TTS
 // Works as a Tauri app (uses the HTTP plugin to reach localhost:8880)
 // and in a plain browser (falls back to fetch).
 
@@ -21,19 +21,31 @@ try {
 }
 const http = (url, opts) => (tauriFetch ? tauriFetch(url, opts) : fetch(url, opts));
 
-// ---- local PDF library: native app storage with a browser fallback ----
+// ---- local book library: native app storage with a browser fallback ----
 let invoke = window.__TAURI__?.core?.invoke || null;
 if (!invoke) {
   try {
     const mod = await import("@tauri-apps/api/core");
     invoke = mod.invoke;
   } catch {
-    // plain-browser previews store PDFs in IndexedDB
+    // plain-browser previews store books in IndexedDB
   }
 }
 
 const LIBRARY_STORE = "pdfs";
 let library = [], activeBookId = null, progressTimer = null;
+const thumbnailJobs = new Set();
+const BOOK_FORMATS = {
+  pdf: { mime: "application/pdf", label: "PDF" },
+  epub: { mime: "application/epub+zip", label: "EPUB" },
+};
+
+function getBookFormat(fileOrBook) {
+  const name = fileOrBook?.name?.toLowerCase() || "";
+  if (fileOrBook?.format && BOOK_FORMATS[fileOrBook.format]) return fileOrBook.format;
+  if (name.endsWith(".epub") || fileOrBook?.type === BOOK_FORMATS.epub.mime) return "epub";
+  return "pdf";
+}
 
 function openLibraryDb() {
   return new Promise((resolve, reject) => {
@@ -51,18 +63,18 @@ function dbRequest(request) {
   });
 }
 
-async function listStoredPDFs() {
-  if (invoke) return invoke("list_pdfs");
+async function listStoredBooks() {
+  if (invoke) return invoke("list_books");
   const db = await openLibraryDb();
   const books = await dbRequest(db.transaction(LIBRARY_STORE).objectStore(LIBRARY_STORE).getAll());
   db.close();
   return books
-    .map(({ bytes, ...book }) => book)
+    .map(({ bytes, ...book }) => ({ ...book, format: getBookFormat(book) }))
     .sort((left, right) => right.addedAt - left.addedAt);
 }
 
-async function saveStoredPDF(name, bytes) {
-  if (invoke) return invoke("save_pdf", { name, bytes: Array.from(new Uint8Array(bytes)) });
+async function saveStoredBook(name, format, bytes) {
+  if (invoke) return invoke("save_book", { name, format, bytes: Array.from(new Uint8Array(bytes)) });
   const db = await openLibraryDb();
   const book = {
     id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -70,35 +82,59 @@ async function saveStoredPDF(name, bytes) {
     size: bytes.byteLength,
     addedAt: Date.now(),
     currentPage: 0,
-    bytes: new Blob([bytes], { type: "application/pdf" }),
+    format,
+    bookmarks: [],
+    bytes: new Blob([bytes], { type: BOOK_FORMATS[format].mime }),
   };
   await dbRequest(db.transaction(LIBRARY_STORE, "readwrite").objectStore(LIBRARY_STORE).put(book));
   db.close();
   return book;
 }
 
-async function readStoredPDF(id) {
-  if (invoke) return Uint8Array.from(await invoke("read_pdf", { id }));
+async function readStoredBook(id) {
+  if (invoke) return Uint8Array.from(await invoke("read_book", { id }));
   const db = await openLibraryDb();
   const book = await dbRequest(db.transaction(LIBRARY_STORE).objectStore(LIBRARY_STORE).get(id));
   db.close();
-  if (!book) throw new Error("Stored PDF not found");
+  if (!book) throw new Error("Stored book not found");
   return book.bytes.arrayBuffer();
 }
 
-async function removeStoredPDF(id) {
-  if (invoke) return invoke("remove_pdf", { id });
+async function removeStoredBook(id) {
+  if (invoke) return invoke("remove_book", { id });
   const db = await openLibraryDb();
   await dbRequest(db.transaction(LIBRARY_STORE, "readwrite").objectStore(LIBRARY_STORE).delete(id));
   db.close();
 }
 
 async function updateStoredProgress(id, currentPage) {
-  if (invoke) return invoke("update_pdf_progress", { id, currentPage });
+  if (invoke) return invoke("update_book_progress", { id, currentPage });
   const db = await openLibraryDb();
   const book = await dbRequest(db.transaction(LIBRARY_STORE).objectStore(LIBRARY_STORE).get(id));
   if (book) {
     book.currentPage = currentPage;
+    await dbRequest(db.transaction(LIBRARY_STORE, "readwrite").objectStore(LIBRARY_STORE).put(book));
+  }
+  db.close();
+}
+
+async function updateStoredThumbnail(id, thumbnail) {
+  if (invoke) return invoke("update_book_thumbnail", { id, thumbnail });
+  const db = await openLibraryDb();
+  const book = await dbRequest(db.transaction(LIBRARY_STORE).objectStore(LIBRARY_STORE).get(id));
+  if (book) {
+    book.thumbnail = thumbnail;
+    await dbRequest(db.transaction(LIBRARY_STORE, "readwrite").objectStore(LIBRARY_STORE).put(book));
+  }
+  db.close();
+}
+
+async function updateStoredBookmarks(id, bookmarks) {
+  if (invoke) return invoke("update_book_bookmarks", { id, bookmarks });
+  const db = await openLibraryDb();
+  const book = await dbRequest(db.transaction(LIBRARY_STORE).objectStore(LIBRARY_STORE).get(id));
+  if (book) {
+    book.bookmarks = bookmarks;
     await dbRequest(db.transaction(LIBRARY_STORE, "readwrite").objectStore(LIBRARY_STORE).put(book));
   }
   db.close();
@@ -111,8 +147,9 @@ function formatFileSize(bytes) {
 }
 
 async function refreshLibrary() {
-  library = await listStoredPDFs();
+  library = (await listStoredBooks()).map((book) => ({ ...book, format: getBookFormat(book) }));
   renderLibrary();
+  hydrateLibraryThumbnails();
 }
 
 function renderLibrary() {
@@ -121,12 +158,37 @@ function renderLibrary() {
     ? library.map((book) => `
       <div class="book-row${book.id === activeBookId ? " active" : ""}">
         <button class="book-open" data-book-id="${book.id}">
-          <strong>${escapeHtml(book.name)}</strong>
-          <span>${formatFileSize(book.size)} · page ${(book.currentPage || 0) + 1}</span>
+          ${book.thumbnail
+            ? `<img class="book-cover" src="${book.thumbnail}" alt="">`
+            : `<span class="book-cover placeholder">${BOOK_FORMATS[book.format].label}</span>`}
+          <span class="book-details">
+            <strong>${escapeHtml(book.name)}</strong>
+            <span>${BOOK_FORMATS[book.format].label} · ${formatFileSize(book.size)} · ${book.format === "epub" ? "section" : "page"} ${(book.currentPage || 0) + 1}${book.bookmarks?.length ? ` · ★ ${book.bookmarks.length}` : ""}</span>
+          </span>
         </button>
         <button class="book-remove" data-remove-id="${book.id}" title="Remove ${escapeHtml(book.name)}">×</button>
       </div>`).join("")
-    : `<div class="library-empty">Imported PDFs will appear here.</div>`;
+    : `<div class="library-empty">Imported PDFs and EPUBs will appear here.</div>`;
+}
+
+async function hydrateLibraryThumbnails() {
+  for (const book of library.filter((candidate) => !candidate.thumbnail && !thumbnailJobs.has(candidate.id))) {
+    thumbnailJobs.add(book.id);
+    try {
+      const thumbnail = await makeLibraryThumbnail(await readStoredBook(book.id), book.format);
+      if (!thumbnail) continue;
+      await updateStoredThumbnail(book.id, thumbnail);
+      const currentBook = library.find((candidate) => candidate.id === book.id);
+      if (currentBook) {
+        currentBook.thumbnail = thumbnail;
+        renderLibrary();
+      }
+    } catch (error) {
+      console.error(`Could not generate thumbnail for ${book.name}:`, error);
+    } finally {
+      thumbnailJobs.delete(book.id);
+    }
+  }
 }
 
 function queueProgressUpdate() {
@@ -139,6 +201,49 @@ function queueProgressUpdate() {
   }
   clearTimeout(progressTimer);
   progressTimer = setTimeout(() => updateStoredProgress(id, pageIndex).catch(console.error), 250);
+}
+
+function activeBook() {
+  return library.find((book) => book.id === activeBookId);
+}
+
+function currentBookmarks() {
+  return activeBook()?.bookmarks || [];
+}
+
+function renderBookmarks() {
+  const bookmarks = currentBookmarks();
+  const bookmarked = bookmarks.includes(currentPage);
+  $("bookmarkPage").disabled = !activeBookId || !pages.length;
+  $("bookmarkPage").textContent = bookmarked ? "★ Bookmarked" : "☆ Bookmark";
+  $("bookmarkPage").classList.toggle("active", bookmarked);
+  $("bookmark").disabled = !bookmarks.length;
+  $("bookmark").innerHTML = bookmarks.length
+    ? `<option value="">Jump to bookmark…</option>${bookmarks
+      .filter((pageIndex) => pages[pageIndex])
+      .map((pageIndex) => `<option value="${pageIndex}">${readerUnit} ${pages[pageIndex].number}${pages[pageIndex].label && readerUnit === "Section" ? ` · ${escapeHtml(pages[pageIndex].label)}` : ""}</option>`)
+      .join("")}`
+    : `<option value="">No bookmarks yet</option>`;
+}
+
+async function toggleBookmark() {
+  const book = activeBook();
+  if (!book || !pages.length) return;
+  const bookmarks = [...(book.bookmarks || [])];
+  const index = bookmarks.indexOf(currentPage);
+  if (index >= 0) bookmarks.splice(index, 1);
+  else bookmarks.push(currentPage);
+  bookmarks.sort((left, right) => left - right);
+  book.bookmarks = bookmarks;
+  renderBookmarks();
+  renderThumbnails();
+  renderLibrary();
+  try {
+    await updateStoredBookmarks(book.id, bookmarks);
+  } catch (error) {
+    statusEl.textContent = `Could not save bookmark · ${error.message}`;
+    statusEl.className = "status warn";
+  }
 }
 
 // ---- check Kokoro + load voices ----
@@ -169,8 +274,10 @@ async function initKokoro() {
 }
 initKokoro();
 
-// ---- PDF -> structured pages -> sentences ----
+// ---- book -> structured pages/sections -> sentences ----
 let sentences = [], sentencePages = [], pages = [], chapters = [], currentPage = 0;
+const THUMBNAIL_WIDTH = 104;
+let readerUnit = "Page";
 
 const normalizeText = (text) => text.replace(/\s+/g, " ").trim();
 const splitSentences = (text) =>
@@ -244,30 +351,193 @@ function makeBlocks(lines) {
   return blocks;
 }
 
-async function importPDF(file) {
-  statusEl.textContent = "Saving PDF…";
-  statusEl.className = "status";
-  const bytes = await file.arrayBuffer();
-  let book = { name: file.name };
-  try {
-    book = await saveStoredPDF(file.name, bytes);
-    await refreshLibrary();
-  } catch (error) {
-    console.error("Could not save PDF:", error);
-  }
-  await loadPDFBytes(bytes, book);
+async function makeThumbnail(page) {
+  const viewport = page.getViewport({ scale: 1 });
+  const thumbnailViewport = page.getViewport({ scale: THUMBNAIL_WIDTH / viewport.width });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.ceil(thumbnailViewport.width);
+  canvas.height = Math.ceil(thumbnailViewport.height);
+  await page.render({ canvasContext: canvas.getContext("2d"), viewport: thumbnailViewport }).promise;
+  return canvas.toDataURL("image/jpeg", 0.72);
 }
 
-async function openStoredPDF(book) {
+function wrapCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines) {
+  const words = text.split(/\s+/);
+  let line = "", lines = 0;
+  for (const word of words) {
+    const nextLine = `${line}${line ? " " : ""}${word}`;
+    if (line && context.measureText(nextLine).width > maxWidth) {
+      context.fillText(line, x, y);
+      line = word;
+      y += lineHeight;
+      if (++lines >= maxLines) return y;
+    } else {
+      line = nextLine;
+    }
+  }
+  if (line && lines < maxLines) context.fillText(line, x, y);
+  return y + lineHeight;
+}
+
+function makeEpubThumbnail(title, excerpt) {
+  const canvas = document.createElement("canvas");
+  canvas.width = THUMBNAIL_WIDTH;
+  canvas.height = 146;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#fffdf8";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#25221f";
+  context.font = "bold 10px sans-serif";
+  let y = wrapCanvasText(context, title, 8, 18, canvas.width - 16, 13, 4) + 5;
+  context.fillStyle = "#6b6259";
+  context.font = "8px sans-serif";
+  wrapCanvasText(context, excerpt, 8, y, canvas.width - 16, 10, 8);
+  return canvas.toDataURL("image/jpeg", 0.72);
+}
+
+function makeImageThumbnail(source) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMBNAIL_WIDTH;
+      canvas.height = 146;
+      const context = canvas.getContext("2d");
+      const scale = Math.min(canvas.width / image.width, canvas.height / image.height);
+      const width = image.width * scale, height = image.height * scale;
+      context.fillStyle = "#fffdf8";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, (canvas.width - width) / 2, (canvas.height - height) / 2, width, height);
+      resolve(canvas.toDataURL("image/jpeg", 0.72));
+    };
+    image.onerror = () => reject(new Error("Could not decode EPUB cover"));
+    image.src = source;
+  });
+}
+
+async function readEpubArchive(buf) {
+  if (!window.JSZip) throw new Error("EPUB support could not load");
+  const zip = await window.JSZip.loadAsync(buf);
+  const containerFile = zip.file("META-INF/container.xml");
+  if (!containerFile) throw new Error("Invalid EPUB: missing container.xml");
+  const container = new DOMParser().parseFromString(await containerFile.async("string"), "application/xml");
+  const packagePath = elementsByLocalName(container, "rootfile")[0]?.getAttribute("full-path");
+  if (!packagePath) throw new Error("Invalid EPUB: missing package document");
+  const packageFile = zip.file(packagePath);
+  if (!packageFile) throw new Error("Invalid EPUB: package document not found");
+  const packageDocument = new DOMParser().parseFromString(await packageFile.async("string"), "application/xml");
+  const packageBase = packagePath.includes("/") ? packagePath.slice(0, packagePath.lastIndexOf("/") + 1) : "";
+  const manifest = new Map(elementsByLocalName(packageDocument, "item").map((item) => [
+    item.getAttribute("id"),
+    {
+      href: item.getAttribute("href"),
+      type: item.getAttribute("media-type"),
+      properties: item.getAttribute("properties") || "",
+    },
+  ]));
+  const spine = elementsByLocalName(packageDocument, "itemref")
+    .map((itemref) => manifest.get(itemref.getAttribute("idref")))
+    .filter((item) => item?.href && (!item.type || /html|xhtml/i.test(item.type)));
+  return { zip, packageDocument, packageBase, manifest, spine };
+}
+
+async function makeEpubCoverThumbnail(buf) {
+  const { zip, packageDocument, packageBase, manifest, spine } = await readEpubArchive(buf);
+  const coverId = elementsByLocalName(packageDocument, "meta")
+    .find((meta) => meta.getAttribute("name") === "cover")
+    ?.getAttribute("content");
+  const cover = [...manifest.values()].find((item) => item.properties.split(/\s+/).includes("cover-image"))
+    || manifest.get(coverId)
+    || [...manifest.values()].find((item) => /image/i.test(item.type || "") && /cover/i.test(item.href || ""));
+  if (cover?.href && /image/i.test(cover.type || "")) {
+    const coverFile = zip.file(archivePath(packageBase, cover.href));
+    if (coverFile) {
+      const source = `data:${cover.type};base64,${await coverFile.async("base64")}`;
+      return makeImageThumbnail(source);
+    }
+  }
+  const firstSection = spine[0]?.href && zip.file(archivePath(packageBase, spine[0].href));
+  if (!firstSection) return null;
+  const blocks = extractEpubBlocks(await firstSection.async("string"));
+  const heading = blocks.find((block) => block.type === "heading")?.text || "EPUB";
+  const excerpt = blocks.find((block) => block.type === "paragraph")?.text || heading;
+  return makeEpubThumbnail(heading, excerpt);
+}
+
+async function makeLibraryThumbnail(buf, format) {
+  if (format === "epub") return makeEpubCoverThumbnail(buf);
+  const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  return makeThumbnail(await pdf.getPage(1));
+}
+
+function addReaderPage({ number, label, blocks, thumbnail }) {
+  const pageIndex = pages.length;
+  const sentenceIndexes = [];
+  blocks.forEach((block) => {
+    block.sentences = splitSentences(block.text).map((text) => {
+      const index = sentences.length;
+      sentences.push(text);
+      sentencePages.push(pageIndex);
+      sentenceIndexes.push(index);
+      return { index, text };
+    });
+    if (block.type === "heading") {
+      chapters.push({ title: block.text, pageIndex, sentenceIndex: block.sentences[0]?.index });
+    }
+  });
+  pages.push({ number, label, blocks, sentenceIndexes, thumbnail });
+}
+
+function finishBookLoad(book, unit) {
+  readerUnit = unit;
+  $("pageUnit").textContent = unit;
+  renderChapters();
+  renderThumbnails();
+  renderPage(Math.min(book.currentPage || 0, pages.length - 1));
+  renderLibrary();
+  $("drop").classList.add("hidden");
+  $("reader").classList.add("show");
+  $("play").disabled = !sentences.length;
+  statusEl.textContent = `${book.name || "Book"} · ${pages.length} ${unit.toLowerCase()}s · ${chapters.length} chapters`;
+  statusEl.className = "status ok";
+}
+
+async function importBook(file) {
+  const format = getBookFormat(file);
+  statusEl.textContent = `Saving ${BOOK_FORMATS[format].label}…`;
+  statusEl.className = "status";
+  const bytes = await file.arrayBuffer();
+  let book = { name: file.name, format };
+  try {
+    book = await saveStoredBook(file.name, format, bytes);
+    await refreshLibrary();
+  } catch (error) {
+    console.error("Could not save book:", error);
+  }
+  try {
+    await loadBookBytes(bytes, book);
+  } catch (error) {
+    console.error("Could not open book:", error);
+    statusEl.textContent = `Could not open book · ${error.message}`;
+    statusEl.className = "status warn";
+  }
+}
+
+async function openStoredBook(book) {
   stopAll();
   statusEl.textContent = `Opening ${book.name}…`;
   statusEl.className = "status";
   try {
-    await loadPDFBytes(await readStoredPDF(book.id), book);
+    await loadBookBytes(await readStoredBook(book.id), book);
   } catch (error) {
-    statusEl.textContent = `Could not open PDF · ${error.message}`;
+    statusEl.textContent = `Could not open book · ${error.message}`;
     statusEl.className = "status warn";
   }
+}
+
+async function loadBookBytes(buf, book = {}) {
+  if (getBookFormat(book) === "epub") return loadEpubBytes(buf, book);
+  return loadPDFBytes(buf, book);
 }
 
 async function loadPDFBytes(buf, book = {}) {
@@ -282,31 +552,75 @@ async function loadPDFBytes(buf, book = {}) {
     const page = await pdf.getPage(p);
     const content = await page.getTextContent();
     const blocks = makeBlocks(extractLines(content.items));
-    const sentenceIndexes = [];
-    blocks.forEach((block) => {
-      block.sentences = splitSentences(block.text).map((text) => {
-        const index = sentences.length;
-        sentences.push(text);
-        sentencePages.push(p - 1);
-        sentenceIndexes.push(index);
-        return { index, text };
-      });
-      if (block.type === "heading") {
-        chapters.push({ title: block.text, pageIndex: p - 1, sentenceIndex: block.sentences[0]?.index });
-      }
-    });
-    pages.push({ number: p, blocks, sentenceIndexes });
+    let thumbnail = null;
+    try {
+      thumbnail = await makeThumbnail(page);
+    } catch (error) {
+      console.error(`Could not render thumbnail for page ${p}:`, error);
+    }
+    addReaderPage({ number: p, label: `Page ${p}`, blocks, thumbnail });
     statusEl.textContent = `Extracting… page ${p}/${pdf.numPages}`;
   }
 
-  renderChapters();
-  renderPage(Math.min(book.currentPage || 0, pages.length - 1));
-  renderLibrary();
-  $("drop").classList.add("hidden");
-  $("reader").classList.add("show");
-  $("play").disabled = !sentences.length;
-  statusEl.textContent = `${book.name || "PDF"} · ${pages.length} pages · ${chapters.length} chapters`;
-  statusEl.className = "status ok";
+  finishBookLoad(book, "Page");
+}
+
+function archivePath(basePath, relativePath) {
+  const path = new URL(relativePath.split("#")[0], `https://epub.local/${basePath}`).pathname.slice(1);
+  return decodeURIComponent(path);
+}
+
+function elementsByLocalName(root, localName) {
+  return [...root.getElementsByTagNameNS("*", localName)];
+}
+
+function extractEpubBlocks(markup) {
+  const document = new DOMParser().parseFromString(markup, "text/html");
+  document.querySelectorAll("script, style, nav, svg").forEach((element) => element.remove());
+  const elements = [...document.querySelectorAll("h1, h2, h3, h4, p, blockquote, li")];
+  const blocks = elements
+    .map((element) => ({
+      type: /^H[1-4]$/.test(element.tagName) ? "heading" : "paragraph",
+      text: normalizeText(element.textContent || ""),
+    }))
+    .filter((block) => block.text.length > 1);
+  if (!blocks.length) {
+    const text = normalizeText(document.body?.textContent || "");
+    if (text) blocks.push({ type: "paragraph", text });
+  }
+  return blocks;
+}
+
+async function loadEpubBytes(buf, book = {}) {
+  stopAll();
+  $("play").disabled = true;
+  statusEl.textContent = "Extracting EPUB…";
+  statusEl.className = "status";
+  const { zip, packageBase, spine } = await readEpubArchive(buf);
+
+  activeBookId = book.id || null;
+  sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
+  for (const [index, item] of spine.entries()) {
+    const contentFile = zip.file(archivePath(packageBase, item.href));
+    if (!contentFile) continue;
+    const blocks = extractEpubBlocks(await contentFile.async("string"));
+    if (!blocks.length) continue;
+    const heading = blocks.find((block) => block.type === "heading")?.text || `Section ${pages.length + 1}`;
+    const excerpt = blocks.find((block) => block.type === "paragraph")?.text || heading;
+    const chapterCount = chapters.length;
+    addReaderPage({
+      number: pages.length + 1,
+      label: heading,
+      blocks,
+      thumbnail: makeEpubThumbnail(heading, excerpt),
+    });
+    if (chapters.length === chapterCount) {
+      chapters.push({ title: heading, pageIndex: pages.length - 1, sentenceIndex: pages[pages.length - 1].sentenceIndexes[0] });
+    }
+    statusEl.textContent = `Extracting… section ${index + 1}/${spine.length}`;
+  }
+  if (!pages.length) throw new Error("This EPUB does not contain readable text");
+  finishBookLoad(book, "Section");
 }
 const escapeHtml = (s) =>
   s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -315,19 +629,48 @@ function sentenceHtml(sentence) {
   return `<span class="sent" data-i="${sentence.index}">${escapeHtml(sentence.text)} </span>`;
 }
 
+function renderThumbnails() {
+  const bookmarks = currentBookmarks();
+  $("thumbnails").innerHTML = pages.map((page, pageIndex) => `
+    <button class="page-thumbnail" data-page-index="${pageIndex}" title="Read from ${readerUnit.toLowerCase()} ${page.number}">
+      ${bookmarks.includes(pageIndex) ? `<span class="thumbnail-bookmark" title="Bookmarked">★</span>` : ""}
+      ${page.thumbnail
+        ? `<img src="${page.thumbnail}" alt="Preview of ${readerUnit.toLowerCase()} ${page.number}">`
+        : `<span class="thumbnail-placeholder">No preview</span>`}
+      <span>${readerUnit} ${page.number}</span>
+      ${readerUnit === "Section" ? `<small>${escapeHtml(page.label)}</small>` : ""}
+    </button>`).join("");
+  updateThumbnailSelection();
+}
+
+function updateThumbnailSelection() {
+  document.querySelectorAll(".page-thumbnail.active").forEach((thumbnail) => {
+    thumbnail.classList.remove("active");
+    thumbnail.removeAttribute("aria-current");
+  });
+  const thumbnail = document.querySelector(`.page-thumbnail[data-page-index="${currentPage}"]`);
+  if (thumbnail) {
+    thumbnail.classList.add("active");
+    thumbnail.setAttribute("aria-current", "page");
+    thumbnail.scrollIntoView({ block: "nearest" });
+  }
+}
+
 function renderPage(pageIndex) {
   if (!pages.length) return;
   currentPage = Math.max(0, Math.min(pageIndex, pages.length - 1));
   const page = pages[currentPage];
   $("text").innerHTML = `
     <article class="book-page">
-      <div class="page-kicker">Page ${page.number}</div>
+      <div class="page-kicker">${readerUnit} ${page.number}</div>
       ${page.blocks.map((block) => block.type === "heading"
         ? `<h2 class="chapter-heading">${block.sentences.map(sentenceHtml).join("")}</h2>`
         : `<p>${block.sentences.map(sentenceHtml).join("")}</p>`).join("")}
     </article>`;
   $("pageCurrent").textContent = page.number;
   $("pageTotal").textContent = pages.length;
+  updateThumbnailSelection();
+  renderBookmarks();
   $("prevPage").disabled = currentPage === 0;
   $("nextPage").disabled = currentPage === pages.length - 1;
   $("pageScroll").scrollTop = 0;
@@ -350,15 +693,36 @@ function renderChapters() {
 
 function goToPage(pageIndex, sentenceIndex) {
   renderPage(pageIndex);
-  if (!playing) {
-    const nextIndex = sentenceIndex ?? pages[currentPage].sentenceIndexes[0];
-    if (nextIndex === undefined) highlight(-1);
-    else { idx = nextIndex; highlight(idx); }
+  const nextIndex = sentenceIndex ?? pages[currentPage].sentenceIndexes[0];
+  if (nextIndex === undefined) {
+    if (playing) stopAll();
+    highlight(-1);
+  } else if (playing && !paused) {
+    startPlaybackFrom(nextIndex);
+  } else {
+    if (paused) stopAll();
+    idx = nextIndex;
+    highlight(idx);
   }
 }
 
 // ---- playback: synth current, prefetch next, queue ----
-let idx = 0, playing = false, paused = false, currentAudio = null, prefetch = null;
+let idx = 0, playing = false, paused = false, currentAudio = null, prefetch = null, playbackRun = 0;
+
+function discardPrefetch() {
+  if (prefetch?.url) URL.revokeObjectURL(prefetch.url);
+  prefetch = null;
+}
+
+function discardCurrentAudio() {
+  if (!currentAudio) return;
+  const url = currentAudio.src;
+  currentAudio.pause();
+  currentAudio.removeAttribute("src");
+  currentAudio.load();
+  currentAudio = null;
+  if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+}
 
 async function synth(i) {
   const payload = {
@@ -383,23 +747,60 @@ async function synth(i) {
   return URL.createObjectURL(blob);
 }
 
-async function playFrom(i) {
-  if (i >= sentences.length) { stopAll(); return; }
+async function playFrom(i, run = playbackRun) {
+  if (i >= sentences.length) {
+    if (run === playbackRun) stopAll();
+    return;
+  }
   idx = i; highlight(i);
   let url;
   try {
-    url = prefetch && prefetch.i === i ? prefetch.url : await synth(i);
+    if (prefetch && prefetch.i === i && prefetch.run === run) {
+      url = prefetch.url;
+      prefetch = null;
+    } else {
+      url = await synth(i);
+    }
   } catch (e) {
+    if (run !== playbackRun) return;
     statusEl.textContent = e.message; statusEl.className = "status warn";
     stopAll(); return;
   }
-  prefetch = null;
-  if (i + 1 < sentences.length) {
-    synth(i + 1).then((u) => (prefetch = { i: i + 1, url: u })).catch(() => {});
+  if (!playing || paused || run !== playbackRun) {
+    URL.revokeObjectURL(url);
+    return;
   }
-  currentAudio = new Audio(url);
-  currentAudio.onended = () => { if (playing && !paused) playFrom(i + 1); };
+  discardCurrentAudio();
+  discardPrefetch();
+  if (i + 1 < sentences.length) {
+    synth(i + 1).then((nextUrl) => {
+      if (!playing || paused || run !== playbackRun) {
+        URL.revokeObjectURL(nextUrl);
+        return;
+      }
+      discardPrefetch();
+      prefetch = { i: i + 1, url: nextUrl, run };
+    }).catch(() => {});
+  }
+  const audio = new Audio(url);
+  currentAudio = audio;
+  currentAudio.onended = () => {
+    if (currentAudio === audio) {
+      currentAudio = null;
+      URL.revokeObjectURL(url);
+    }
+    if (playing && !paused && run === playbackRun) playFrom(i + 1, run);
+  };
   await currentAudio.play();
+}
+
+function startPlaybackFrom(i) {
+  playbackRun++;
+  discardCurrentAudio();
+  discardPrefetch();
+  playing = true;
+  paused = false;
+  playFrom(i, playbackRun);
 }
 
 function highlight(i) {
@@ -410,9 +811,10 @@ function highlight(i) {
 }
 
 function stopAll() {
+  playbackRun++;
   playing = false; paused = false;
-  if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-  prefetch = null;
+  discardCurrentAudio();
+  discardPrefetch();
   $("play").disabled = false; $("pause").disabled = true; $("stop").disabled = true;
   $("play").textContent = "▶ Play";
 }
@@ -423,6 +825,14 @@ function resetReader() {
   progressTimer = null;
   activeBookId = null;
   idx = 0; sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
+  readerUnit = "Page";
+  $("pageUnit").textContent = readerUnit;
+  $("bookmarkPage").disabled = true;
+  $("bookmarkPage").textContent = "☆ Bookmark";
+  $("bookmarkPage").classList.remove("active");
+  $("bookmark").disabled = true;
+  $("bookmark").innerHTML = `<option value="">No bookmarks yet</option>`;
+  $("thumbnails").innerHTML = "";
   $("reader").classList.remove("show"); $("drop").classList.remove("hidden");
   $("play").disabled = true;
   renderLibrary();
@@ -431,14 +841,18 @@ function resetReader() {
 // ---- controls ----
 $("play").onclick = () => {
   if (paused && currentAudio) { paused = false; currentAudio.play(); }
-  else { playing = true; paused = false; playFrom(idx); }
+  else startPlaybackFrom(idx);
   $("play").disabled = true; $("pause").disabled = false; $("stop").disabled = false;
 };
 $("pause").onclick = () => {
   paused = true; if (currentAudio) currentAudio.pause();
   $("play").disabled = false; $("pause").disabled = true; $("play").textContent = "▶ Resume";
 };
-$("stop").onclick = () => { stopAll(); idx = 0; highlight(-1); };
+$("stop").onclick = () => {
+  stopAll();
+  idx = pages[currentPage]?.sentenceIndexes[0] ?? 0;
+  highlight(-1);
+};
 $("new").onclick = resetReader;
 $("speed").oninput = (e) => ($("speedVal").textContent = parseFloat(e.target.value).toFixed(1) + "×");
 $("prevPage").onclick = () => goToPage(currentPage - 1);
@@ -448,20 +862,34 @@ $("chapter").onchange = (e) => {
   const chapter = chapters[+e.target.value];
   if (chapter) goToPage(chapter.pageIndex, chapter.sentenceIndex);
 };
+$("bookmarkPage").onclick = toggleBookmark;
+$("bookmark").onchange = (e) => {
+  if (e.target.value === "") return;
+  goToPage(+e.target.value);
+  e.target.value = "";
+};
+$("thumbnails").onclick = (e) => {
+  const thumbnail = e.target.closest("[data-page-index]");
+  if (thumbnail) goToPage(+thumbnail.dataset.pageIndex);
+};
 
 $("text").onclick = (e) => {
   const s = e.target.closest(".sent"); if (!s) return;
   const i = +s.dataset.i;
-  if (playing) { if (currentAudio) currentAudio.pause(); prefetch = null; playFrom(i); }
+  if (playing) startPlaybackFrom(i);
   else { idx = i; highlight(i); }
 };
 
 // ---- drop zone ----
 const drop = $("drop"), fileInput = $("file");
-const isPDF = (file) => file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+const isSupportedBook = (file) => {
+  const name = file.name.toLowerCase();
+  return file.type === BOOK_FORMATS.pdf.mime || file.type === BOOK_FORMATS.epub.mime
+    || name.endsWith(".pdf") || name.endsWith(".epub");
+};
 drop.onclick = () => fileInput.click();
 fileInput.onchange = (e) => {
-  if (e.target.files[0]) importPDF(e.target.files[0]);
+  if (e.target.files[0]) importBook(e.target.files[0]);
   e.target.value = "";
 };
 ["dragenter", "dragover"].forEach((ev) =>
@@ -469,8 +897,8 @@ fileInput.onchange = (e) => {
 ["dragleave", "drop"].forEach((ev) =>
   drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("drag"); }));
 drop.addEventListener("drop", (e) => {
-  const f = [...e.dataTransfer.files].find(isPDF);
-  if (f) importPDF(f);
+  const f = [...e.dataTransfer.files].find(isSupportedBook);
+  if (f) importBook(f);
 });
 
 // ---- library sidebar ----
@@ -481,23 +909,23 @@ $("bookList").onclick = async (e) => {
     const id = removeButton.dataset.removeId;
     if (id === activeBookId) resetReader();
     try {
-      await removeStoredPDF(id);
+      await removeStoredBook(id);
       await refreshLibrary();
-      statusEl.textContent = "PDF removed from library";
+      statusEl.textContent = "Book removed from library";
       statusEl.className = "status";
     } catch (error) {
-      statusEl.textContent = `Could not remove PDF · ${error.message}`;
+      statusEl.textContent = `Could not remove book · ${error.message}`;
       statusEl.className = "status warn";
     }
     return;
   }
   const openButton = e.target.closest("[data-book-id]");
   const book = library.find((candidate) => candidate.id === openButton?.dataset.bookId);
-  if (book) openStoredPDF(book);
+  if (book) openStoredBook(book);
 };
 
 refreshLibrary().catch((error) => {
-  console.error("Could not load PDF library:", error);
-  statusEl.textContent = "Could not load saved PDF library";
+  console.error("Could not load book library:", error);
+  statusEl.textContent = "Could not load saved book library";
   statusEl.className = "status warn";
 });

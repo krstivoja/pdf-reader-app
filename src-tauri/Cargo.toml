@@ -1,7 +1,7 @@
 [package]
 name = "pdf-reader"
 version = "0.1.0"
-description = "Local PDF audiobook reader powered by Kokoro TTS"
+description = "Local PDF and EPUB audiobook reader powered by Kokoro TTS"
 edition = "2021"
 
 [lib]
