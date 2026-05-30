@@ -2,13 +2,14 @@
 
 A local audiobook player: drag in a PDF or EPUB, pick a voice, and it reads the book
 aloud using **Kokoro** TTS running on your machine. No cloud, no tokens, no
-uploads. PDF text is extracted in-app with pdf.js; EPUB text is extracted from
-the book's reading-order sections. Speech comes from a local Kokoro server.
+uploads, no Docker. PDF text is extracted in-app with pdf.js; EPUB text is extracted
+from the book's reading-order sections. Speech comes from a bundled Kokoro inference
+binary that the app launches and shuts down automatically.
 Imported books are kept in a local library for quick switching, with reading
 progress and page or section bookmarks saved per book.
 
-Built with **Tauri v2** (tiny native macOS app, ~3–5 MB) wrapping an
-HTML/JS front-end.
+Built with **Tauri v2** wrapping an HTML/JS front-end. The app bundle is roughly
+220 MB because it includes the Kokoro model, voices, and native inference binary.
 
 ---
 
@@ -27,25 +28,7 @@ xcode-select --install
 brew install node
 ```
 
-You also need **Docker Desktop** running, for the Kokoro server.
-
-## 2. Start Kokoro (the speech server)
-
-```bash
-docker run -d --name kokoro -p 8880:8880 ghcr.io/remsky/kokoro-fastapi-cpu:latest
-```
-
-First run downloads the image + model (~1 GB). After that it restarts with
-Docker. Verify it's up:
-
-```bash
-curl http://localhost:8880/health
-```
-
-The app talks to `http://localhost:8880`. If Kokoro isn't running, the app
-still opens — it just shows a warning in the status badge and can't speak.
-
-## 3. Install app dependencies
+## 2. Install app dependencies
 
 From this folder:
 
@@ -53,7 +36,20 @@ From this folder:
 npm install
 ```
 
-## 4. App icons (required before first build)
+## 2a. Fetch the voice engine resources
+
+The Kokoro ONNX model (~170 MB) and voice embeddings (~27 MB) are too large to
+commit. Fetch them once:
+
+```bash
+npm run setup
+```
+
+This downloads `model.onnx` and `voices.bin` into `src-tauri/resources/tts/`.
+The script is idempotent — running it again does nothing if the files are
+already present.
+
+## 3. App icons (required before first build)
 
 Tauri needs icon files in `src-tauri/icons/`. Generate them from any square
 PNG (1024×1024 works well):
@@ -66,16 +62,16 @@ This creates all the sizes referenced in `tauri.conf.json` (32x32.png,
 128x128.png, 128x128@2x.png, icon.icns). Skip this and the build will fail on
 missing icons.
 
-## 5. Run in dev mode
+## 4. Run in dev mode
 
 ```bash
 npm run dev
 ```
 
-This opens the app in a live window with hot reload. Drag in a PDF or EPUB and press
-Play.
+This opens the app and starts its bundled Kokoro voice engine. Drag in a PDF or
+EPUB and press Play.
 
-## 6. Build the distributable Mac app
+## 5. Build the distributable Mac app
 
 ```bash
 npm run build
@@ -86,13 +82,9 @@ Output lands in `src-tauri/target/release/bundle/`:
 - `macos/PDF Reader.app` — the app bundle (drag to /Applications)
 - `dmg/PDF Reader_0.1.0_aarch64.dmg` — a disk image for sharing
 
-On an M1/M2/M3 Mac this builds for Apple Silicon by default. For a universal
-binary:
-
-```bash
-rustup target add x86_64-apple-darwin
-npm run tauri build -- --target universal-apple-darwin
-```
+The bundled voice engine is currently an Apple Silicon binary, so the app runs
+on M1 or newer Macs. An Intel or universal build also needs an Intel `koko`
+binary in the app resources.
 
 ---
 
@@ -102,21 +94,32 @@ npm run tauri build -- --target universal-apple-darwin
   which this version doesn't include. Ask if you want a Tesseract fallback added.
 - **EPUB navigation** uses the book's reflowable reading-order sections instead
   of fixed pages.
-- **Unsigned app**: the first time you open the built .app, macOS Gatekeeper will
-  warn it's from an unidentified developer. Right-click → Open to bypass, or
-  sign it with an Apple Developer ID if you plan to distribute.
-- **Voices**: the dropdown auto-populates from Kokoro's `/v1/audio/voices`. The
-  `af_*` voices are American female, `am_*` American male, `bf_*`/`bm_*` British.
+- **macOS signing**: local builds use a complete ad-hoc bundle signature via
+  `bundle.macOS.signingIdentity` in `src-tauri/tauri.conf.json`. Before sharing
+  the DMG publicly, replace `-` with your Apple Developer ID signing identity and
+  notarize it. The bundled `koko` executable is included inside that bundle and
+  must be covered by the final signature. For a local install, use right-click →
+  Open when Gatekeeper prompts. If a downloaded development build still cannot
+  launch its voice engine, remove its quarantine attribute:
+  `xattr -dr com.apple.quarantine "/Applications/PDF Reader.app"`.
+- **Voices**: the app bundles `af_kore`, `af_nova`, and `af_sky`.
 - **Local library**: imported PDFs and EPUBs are copied into the app-data directory on
   your Mac. Use the sidebar to reopen a book, resume its last page, or remove it.
 - **Bookmarks**: open a book and use the bookmark button to save the visible PDF
   page or EPUB section. Saved bookmarks appear in the jump menu and thumbnail rail.
 - **Themes**: use the header button to switch between dark and light mode. The
   selected theme is restored the next time the app opens.
+- **Local voice engine**: the app starts the bundled `koko` process on an
+  available `127.0.0.1` port and stops it when the app window closes. If `koko`
+  exits unexpectedly, the app restarts it automatically and reconnects the UI.
+- **Voice engine logs**: `koko` output is written to
+  `~/Library/Logs/com.marko.pdfreader/tts.log`. When the file exceeds roughly
+  1 MB, the previous log is kept as `tts.log.1`.
 - **CORS / networking**: in the Tauri app, requests go through the HTTP plugin
-  (allowed for `localhost:8880` in `src-tauri/capabilities/default.json`). The
+  (allowed only for loopback ports in `src-tauri/capabilities/default.json`). The
   same front-end also runs in a plain browser via `fetch` if you just open
-  `src/index.html` through a local web server.
+  `src/index.html` through a local web server. Browser preview mode falls back to
+  `127.0.0.1:51234` because it cannot ask the Tauri backend for the selected port.
 
 ## How it works
 

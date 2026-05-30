@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Allow the reader UI to reach the local Kokoro server","local":true,"windows":["main"],"permissions":["core:default",{"identifier":"http:default","allow":[{"url":"http://localhost:8880/*"}]}]}}
+{"default":{"identifier":"default","description":"Allow the reader UI to reach the local Kokoro server","local":true,"windows":["main"],"permissions":["core:default",{"identifier":"http:default","allow":[{"url":"http://127.0.0.1:*/*"}]}]}}

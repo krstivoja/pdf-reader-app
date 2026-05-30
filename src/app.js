@@ -1,25 +1,67 @@
 // PDF + EPUB Reader — local audiobook player using Kokoro TTS
-// Works as a Tauri app (uses the HTTP plugin to reach localhost:8880)
+// Works as a Tauri app (uses the HTTP plugin to reach the bundled TTS engine)
 // and in a plain browser (falls back to fetch).
 
-import * as pdfjs from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs";
-pdfjs.GlobalWorkerOptions.workerSrc =
-  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs";
+import * as pdfjs from "./vendor/pdfjs/pdf.mjs";
+pdfjs.GlobalWorkerOptions.workerSrc = "./vendor/pdfjs/pdf.worker.min.mjs";
 
-const KOKORO = "http://localhost:8880/v1";
-const KOKORO_ROOT = "http://localhost:8880";
+const DEFAULT_KOKORO_ROOT = "http://127.0.0.1:51234";
+let kokoroRoot = DEFAULT_KOKORO_ROOT;
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
 const THEME_STORE = "pdf-reader-theme";
 
-function applyTheme(theme) {
-  const light = theme === "light";
-  document.documentElement.dataset.theme = light ? "light" : "dark";
-  $("theme").textContent = light ? "☾ Dark" : "☀ Light";
-  $("theme").title = light ? "Switch to dark theme" : "Switch to light theme";
+const APPEARANCE_STORE = "pdf-reader-appearance";
+const VALID_THEMES = ["ink", "paper", "sepia", "midnight", "cloud", "slate", "dracula"];
+const VALID_FONTS = ["editorial", "classic", "literary", "modern"];
+const DEFAULT_APPEARANCE = { theme: "ink", font: "editorial", size: 17 };
+
+function loadAppearance() {
+  // Migration from legacy single-key store
+  const legacy = localStorage.getItem(THEME_STORE);
+  if (legacy && !localStorage.getItem(APPEARANCE_STORE)) {
+    const theme = legacy === "light" ? "paper" : "ink";
+    return { ...DEFAULT_APPEARANCE, theme };
+  }
+  try {
+    const stored = JSON.parse(localStorage.getItem(APPEARANCE_STORE) || "{}");
+    return {
+      theme: VALID_THEMES.includes(stored.theme) ? stored.theme : DEFAULT_APPEARANCE.theme,
+      font:  VALID_FONTS.includes(stored.font)   ? stored.font  : DEFAULT_APPEARANCE.font,
+      size:  Number.isFinite(stored.size) ? Math.max(14, Math.min(22, stored.size)) : DEFAULT_APPEARANCE.size,
+    };
+  } catch {
+    return { ...DEFAULT_APPEARANCE };
+  }
 }
 
-applyTheme(localStorage.getItem(THEME_STORE) || "dark");
+function saveAppearance(appearance) {
+  localStorage.setItem(APPEARANCE_STORE, JSON.stringify(appearance));
+}
+
+let appearance = loadAppearance();
+
+const LIGHT_THEMES = new Set(["paper", "sepia", "cloud"]);
+
+function applyAppearance(next = appearance) {
+  appearance = { ...appearance, ...next };
+  document.documentElement.dataset.theme = appearance.theme;
+  document.documentElement.dataset.mode = LIGHT_THEMES.has(appearance.theme) ? "light" : "dark";
+  document.documentElement.dataset.font = appearance.font;
+  document.documentElement.style.setProperty("--reader-size", appearance.size + "px");
+  // Reflect active state in any open settings panel
+  document.querySelectorAll(".font-card").forEach((card) =>
+    card.classList.toggle("active", card.dataset.font === appearance.font));
+  document.querySelectorAll(".theme-card").forEach((card) =>
+    card.classList.toggle("active", card.dataset.themePick === appearance.theme));
+  const sizeInput = $("readerSize");
+  if (sizeInput && sizeInput.value != appearance.size) sizeInput.value = appearance.size;
+  const sizeOut = $("readerSizeReadout");
+  if (sizeOut) sizeOut.textContent = appearance.size + " px";
+  saveAppearance(appearance);
+}
+
+applyAppearance();
 
 // ---- HTTP layer: prefer Tauri's plugin, fall back to fetch ----
 let tauriFetch = null;
@@ -248,7 +290,7 @@ function renderLibrary() {
           .map((pageIndex) => `<button class="book-bookmark" data-bookmark-book-id="${book.id}" data-bookmark-page="${pageIndex}" title="Jump to ${escapeHtml(bookmarkDisplay(book, pageIndex))}"><span class="star">★</span>${escapeHtml(bookmarkDisplay(book, pageIndex))}</button>`)
           .join("")}</div>` : ""}
       </div>`).join("")
-    : `<div class="library-empty">Imported PDFs and EPUBs will appear here.</div>`;
+    : `<div class="library-empty">Your imported books will appear here.</div>`;
 }
 
 async function hydrateLibraryThumbnails() {
@@ -295,8 +337,8 @@ function renderBookmarks() {
   const bookmarks = currentBookmarks();
   const bookmarked = bookmarks.includes(currentPage);
   $("bookmarkPage").disabled = !activeBookId || !pages.length;
-  $("bookmarkPage").textContent = bookmarked ? "★ Bookmarked" : "☆ Bookmark";
-  $("bookmarkPage").classList.toggle("active", bookmarked);
+  $("bookmarkPage").dataset.bookmarked = bookmarked ? "true" : "false";
+  $("bookmarkPage").title = bookmarked ? "Remove bookmark" : "Bookmark this page";
   $("bookmark").disabled = !bookmarks.length;
   $("bookmark").innerHTML = bookmarks.length
     ? `<option value="">Jump to bookmark…</option>${bookmarks
@@ -322,37 +364,79 @@ async function toggleBookmark() {
     await updateStoredBookmarks(book.id, bookmarks);
   } catch (error) {
     statusEl.textContent = `Could not save bookmark · ${error.message}`;
-    statusEl.className = "status warn";
+    statusEl.className = "status-pill is-warn";
   }
 }
 
-// ---- check Kokoro + load voices ----
-async function initKokoro() {
+// ---- wait for bundled voice engine, then load voices ----
+const BUNDLED_VOICES = ["af_kore", "af_nova", "af_sky"];
+const VOICE_LABELS = {
+  af_kore: "Kore — American Female",
+  af_nova: "Nova — American Female",
+  af_sky:  "Sky — American Female",
+};
+let voiceEngineReady = false, kokoroInitPromise = null;
+
+async function refreshKokoroEndpoint() {
+  if (!invoke) return { running: true, endpointChanged: false };
   try {
-    const r = await http(`${KOKORO_ROOT}/health`);
-    if (!r.ok) throw new Error();
-    let voices = [];
-    try {
-      const vr = await http(`${KOKORO}/audio/voices`);
-      const j = await vr.json();
-      voices = (j.voices || j.data || [])
-        .map((voice) => typeof voice === "string" ? voice : voice.id)
-        .filter(Boolean);
-    } catch { /* use fallback list below */ }
-    if (!voices.length) {
-      voices = ["af_heart", "af_bella", "af_sky", "af_nicole", "am_adam",
-                "am_michael", "bf_emma", "bf_isabella", "bm_george", "bm_lewis"];
-    }
-    $("voice").innerHTML = voices.map((v) => `<option value="${v}">${v}</option>`).join("");
-    statusEl.textContent = "Kokoro ready ✓";
-    statusEl.className = "status ok";
-  } catch {
-    statusEl.textContent = "Kokoro not found on :8880 — start the Docker container";
-    statusEl.className = "status warn";
-    $("voice").innerHTML = `<option>af_heart</option>`;
+    const engine = await invoke("tts_status");
+    const nextRoot = engine.port ? `http://127.0.0.1:${engine.port}` : null;
+    const endpointChanged = Boolean(nextRoot && nextRoot !== kokoroRoot);
+    if (nextRoot) kokoroRoot = nextRoot;
+    return { ...engine, endpointChanged };
+  } catch (error) {
+    console.error("Could not inspect voice engine:", error);
+    return { running: false, endpointChanged: false, lastError: error.message };
   }
 }
+
+async function waitForKokoro() {
+  $("voice").innerHTML = BUNDLED_VOICES.map((v) => `<option value="${v}">${VOICE_LABELS[v] || v}</option>`).join("");
+  statusEl.textContent = "Starting voice engine…";
+  statusEl.className = "status-pill is-loading";
+  const deadline = Date.now() + 30000;
+  let engine = null;
+  while (Date.now() < deadline) {
+    engine = await refreshKokoroEndpoint();
+    try {
+      const r = engine.running && await http(`${kokoroRoot}/v1/audio/voices`);
+      if (r.ok) {
+        voiceEngineReady = true;
+        statusEl.textContent = "Voice engine ready";
+        statusEl.className = "status-pill is-ok";
+        return;
+      }
+    } catch { /* not up yet */ }
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+  voiceEngineReady = false;
+  const details = engine?.lastError ? ` · ${engine.lastError}` : "";
+  statusEl.textContent = `Voice engine failed to start${details}`;
+  statusEl.className = "status-pill is-warn";
+}
+
+function initKokoro() {
+  if (!kokoroInitPromise) {
+    kokoroInitPromise = waitForKokoro().finally(() => {
+      kokoroInitPromise = null;
+    });
+  }
+  return kokoroInitPromise;
+}
+
 initKokoro();
+setInterval(async () => {
+  const engine = await refreshKokoroEndpoint();
+  if (engine.endpointChanged || !engine.running) {
+    if (voiceEngineReady) {
+      statusEl.textContent = "Voice engine restarting…";
+      statusEl.className = "status-pill is-loading";
+    }
+    voiceEngineReady = false;
+  }
+  if (!voiceEngineReady) initKokoro();
+}, 2000);
 
 // ---- book -> structured pages/sections -> sentences ----
 let sentences = [], sentencePages = [], pages = [], chapters = [], currentPage = 0;
@@ -587,13 +671,13 @@ function finishBookLoad(book, unit) {
   $("reader").classList.add("show");
   $("play").disabled = !sentences.length;
   statusEl.textContent = `${book.name || "Book"} · ${pages.length} ${unit.toLowerCase()}s · ${chapters.length} chapters`;
-  statusEl.className = "status ok";
+  statusEl.className = "status-pill is-ok";
 }
 
 async function importBook(file) {
   const format = getBookFormat(file);
   statusEl.textContent = `Saving ${BOOK_FORMATS[format].label}…`;
-  statusEl.className = "status";
+  statusEl.className = "status-pill is-loading";
   const bytes = await file.arrayBuffer();
   let book = { name: file.name, format };
   try {
@@ -607,20 +691,20 @@ async function importBook(file) {
   } catch (error) {
     console.error("Could not open book:", error);
     statusEl.textContent = `Could not open book · ${error.message}`;
-    statusEl.className = "status warn";
+    statusEl.className = "status-pill is-warn";
   }
 }
 
 async function openStoredBook(book) {
   stopAll();
   statusEl.textContent = `Opening ${book.name}…`;
-  statusEl.className = "status";
+  statusEl.className = "status-pill is-loading";
   try {
     if (book.id && await loadFromCache(book)) return;
     await loadBookBytes(await readStoredBook(book.id), book);
   } catch (error) {
     statusEl.textContent = `Could not open book · ${error.message}`;
-    statusEl.className = "status warn";
+    statusEl.className = "status-pill is-warn";
   }
 }
 
@@ -636,7 +720,7 @@ async function loadFromCache(book) {
   stopAll();
   $("play").disabled = true;
   statusEl.textContent = `Opening ${book.name || "book"}…`;
-  statusEl.className = "status";
+  statusEl.className = "status-pill is-loading";
   activeBookId = book.id || null;
   sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
   for (const page of cached.pages) {
@@ -668,7 +752,7 @@ async function loadPDFBytes(buf, book = {}) {
   stopAll();
   $("play").disabled = true;
   statusEl.textContent = "Extracting text…";
-  statusEl.className = "status";
+  statusEl.className = "status-pill is-loading";
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
   activeBookId = book.id || null;
   sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
@@ -720,7 +804,7 @@ async function loadEpubBytes(buf, book = {}) {
   stopAll();
   $("play").disabled = true;
   statusEl.textContent = "Extracting EPUB…";
-  statusEl.className = "status";
+  statusEl.className = "status-pill is-loading";
   const { zip, packageBase, spine } = await readEpubArchive(buf);
 
   activeBookId = book.id || null;
@@ -806,6 +890,7 @@ function renderPage(pageIndex) {
   });
   $("chapter").value = chapterIndex >= 0 ? String(chapterIndex) : "";
   queueProgressUpdate();
+  updateScrubber();
 }
 
 function renderChapters() {
@@ -859,11 +944,18 @@ async function synth(i) {
     speed: parseFloat($("speed").value),
   };
 
-  const r = await http(`${KOKORO}/audio/speech`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let r;
+  try {
+    r = await http(`${kokoroRoot}/v1/audio/speech`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    voiceEngineReady = false;
+    initKokoro();
+    throw new Error(`Voice engine unavailable · ${error.message}`);
+  }
   if (!r.ok) {
     const detail = await r.text();
     console.error("TTS request failed:", r.status, detail);
@@ -889,7 +981,7 @@ async function playFrom(i, run = playbackRun) {
     }
   } catch (e) {
     if (run !== playbackRun) return;
-    statusEl.textContent = e.message; statusEl.className = "status warn";
+    statusEl.textContent = e.message; statusEl.className = "status-pill is-warn";
     stopAll(); return;
   }
   if (!playing || paused || run !== playbackRun) {
@@ -926,6 +1018,7 @@ function startPlaybackFrom(i) {
   discardPrefetch();
   playing = true;
   paused = false;
+  updatePlaybackControls();
   playFrom(i, playbackRun);
 }
 
@@ -934,6 +1027,7 @@ function highlight(i) {
   document.querySelectorAll(".sent.active").forEach((e) => e.classList.remove("active"));
   const el = document.querySelector(`.sent[data-i="${i}"]`);
   if (el) { el.classList.add("active"); el.scrollIntoView({ block: "center", behavior: "smooth" }); }
+  updateScrubber();
 }
 
 function stopAll() {
@@ -941,8 +1035,7 @@ function stopAll() {
   playing = false; paused = false;
   discardCurrentAudio();
   discardPrefetch();
-  $("play").disabled = false; $("pause").disabled = true; $("stop").disabled = true;
-  $("play").textContent = "▶ Play";
+  updatePlaybackControls();
 }
 
 function resetReader() {
@@ -954,8 +1047,7 @@ function resetReader() {
   readerUnit = "Page";
   $("pageUnit").textContent = readerUnit;
   $("bookmarkPage").disabled = true;
-  $("bookmarkPage").textContent = "☆ Bookmark";
-  $("bookmarkPage").classList.remove("active");
+  $("bookmarkPage").dataset.bookmarked = "false";
   $("bookmark").disabled = true;
   $("bookmark").innerHTML = `<option value="">No bookmarks yet</option>`;
   $("thumbnails").innerHTML = "";
@@ -1028,26 +1120,86 @@ function jumpToSearchHit(pageIndex, sentenceIndex) {
 }
 
 // ---- controls ----
+function updatePlaybackControls() {
+  $("play").disabled = !sentences.length;
+  $("play").dataset.playing = playing && !paused ? "true" : "false";
+  $("stop").disabled = !playing;
+  updateScrubber();
+}
+
+function updateScrubber() {
+  const fill = $("scrubberFill"), head = $("scrubberHead");
+  const now = $("scrubberNow"), right = $("scrubberRight");
+  if (!fill || !pages.length) return;
+  const page = pages[currentPage];
+  const sentencesInPage = page?.sentenceIndexes || [];
+  let positionInPage = 0;
+  if (sentencesInPage.length) {
+    const localIndex = sentencesInPage.indexOf(idx);
+    positionInPage = localIndex >= 0 ? localIndex + 1 : 0;
+  }
+  const total = sentencesInPage.length;
+  const pct = total ? Math.min(100, (positionInPage / total) * 100) : 0;
+  fill.style.width = pct + "%";
+  head.style.left = pct + "%";
+  const voiceLabel = VOICE_LABELS[$("voice").value]?.split(" — ")[0] || $("voice").value || "Voice";
+  if (playing && !paused && total) {
+    now.innerHTML = `Now reading sentence ${positionInPage} of ${total} · <em>${escapeHtml(voiceLabel)}</em>`;
+  } else if (paused) {
+    now.innerHTML = `Paused at sentence ${positionInPage} of ${total} · <em>${escapeHtml(voiceLabel)}</em>`;
+  } else if (sentences.length) {
+    now.innerHTML = `Ready · <em>${escapeHtml(voiceLabel)}</em>`;
+  } else {
+    now.textContent = "Ready";
+  }
+  right.textContent = `${readerUnit} ${page?.number ?? "—"} of ${pages.length}`;
+}
+
 $("play").onclick = () => {
-  if (paused && currentAudio) { paused = false; currentAudio.play(); }
-  else startPlaybackFrom(idx);
-  $("play").disabled = true; $("pause").disabled = false; $("stop").disabled = false;
-};
-$("pause").onclick = () => {
-  paused = true; if (currentAudio) currentAudio.pause();
-  $("play").disabled = false; $("pause").disabled = true; $("play").textContent = "▶ Resume";
+  if (playing && !paused) {
+    paused = true;
+    if (currentAudio) currentAudio.pause();
+    updatePlaybackControls();
+  } else if (paused && currentAudio) {
+    paused = false;
+    currentAudio.play();
+    updatePlaybackControls();
+  } else {
+    startPlaybackFrom(idx);
+  }
 };
 $("stop").onclick = () => {
   stopAll();
   idx = pages[currentPage]?.sentenceIndexes[0] ?? 0;
   highlight(-1);
 };
-$("theme").onclick = () => {
-  const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-  localStorage.setItem(THEME_STORE, theme);
-  applyTheme(theme);
-};
+function openSettings() {
+  $("settingsPanel").classList.add("show");
+  $("settingsScrim").classList.add("show");
+  $("settingsPanel").setAttribute("aria-hidden", "false");
+  applyAppearance();
+}
+function closeSettings() {
+  $("settingsPanel").classList.remove("show");
+  $("settingsScrim").classList.remove("show");
+  $("settingsPanel").setAttribute("aria-hidden", "true");
+}
+$("openSettings").onclick = openSettings;
+$("closeSettings").onclick = closeSettings;
+$("settingsScrim").onclick = closeSettings;
+
+document.querySelectorAll(".font-card").forEach((card) => {
+  card.onclick = () => applyAppearance({ font: card.dataset.font });
+});
+document.querySelectorAll(".theme-card").forEach((card) => {
+  card.onclick = () => applyAppearance({ theme: card.dataset.themePick });
+});
+$("readerSize").oninput = (e) => applyAppearance({ size: parseInt(e.target.value, 10) });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && $("settingsPanel").classList.contains("show")) closeSettings();
+});
 $("speed").oninput = (e) => ($("speedVal").textContent = parseFloat(e.target.value).toFixed(1) + "×");
+$("voice").onchange = () => updateScrubber();
 $("prevPage").onclick = () => goToPage(currentPage - 1);
 $("nextPage").onclick = () => goToPage(currentPage + 1);
 $("chapter").onchange = (e) => {
@@ -1134,7 +1286,7 @@ drop.addEventListener("drop", (e) => {
   if (f) importBook(f);
   else {
     statusEl.textContent = "Drop a PDF or EPUB file";
-    statusEl.className = "status warn";
+    statusEl.className = "status-pill is-warn";
   }
 });
 
@@ -1159,10 +1311,10 @@ $("bookList").onclick = async (e) => {
       await removeStoredBook(id);
       await refreshLibrary();
       statusEl.textContent = "Book removed from library";
-      statusEl.className = "status";
+      statusEl.className = "status-pill is-loading";
     } catch (error) {
       statusEl.textContent = `Could not remove book · ${error.message}`;
-      statusEl.className = "status warn";
+      statusEl.className = "status-pill is-warn";
     }
     return;
   }
@@ -1174,5 +1326,5 @@ $("bookList").onclick = async (e) => {
 refreshLibrary().catch((error) => {
   console.error("Could not load book library:", error);
   statusEl.textContent = "Could not load saved book library";
-  statusEl.className = "status warn";
+  statusEl.className = "status-pill is-warn";
 });

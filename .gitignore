@@ -2,3 +2,7 @@
 node_modules/
 src-tauri/target/
 .env
+
+# TTS resources too big for git — fetched by scripts/setup-tts.sh
+src-tauri/resources/tts/model.onnx
+src-tauri/resources/tts/voices.bin

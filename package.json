@@ -4,6 +4,7 @@
   "description": "Local PDF and EPUB audiobook reader powered by Kokoro TTS",
   "type": "module",
   "scripts": {
+    "setup": "bash scripts/setup-tts.sh",
     "dev": "tauri dev",
     "build": "tauri build",
     "tauri": "tauri"

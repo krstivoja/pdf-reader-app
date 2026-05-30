@@ -10,16 +10,19 @@
     "windows": [
       {
         "title": "PDF Reader",
-        "width": 1100,
-        "height": 780,
-        "minWidth": 700,
-        "minHeight": 500,
-        "dragDropEnabled": false
+        "width": 1280,
+        "height": 820,
+        "minWidth": 820,
+        "minHeight": 540,
+        "dragDropEnabled": false,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "backgroundColor": "#100E0C"
       }
     ],
     "withGlobalTauri": true,
     "security": {
-      "csp": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8880 https://cdnjs.cloudflare.com; img-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob: https://cdnjs.cloudflare.com"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:*; img-src 'self' data:; media-src 'self' blob:; worker-src 'self' blob:"
     }
   },
   "bundle": {
@@ -31,8 +34,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns"
     ],
+    "resources": ["resources/tts/*", "resources/tts/espeak-ng-data/**/*"],
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
     }
   }
 }
