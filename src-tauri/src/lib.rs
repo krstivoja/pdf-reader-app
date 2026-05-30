@@ -60,6 +60,10 @@ fn book_path(directory: &Path, id: &str, format: &str) -> PathBuf {
     directory.join(format!("{id}.{format}"))
 }
 
+fn cache_path(directory: &Path, id: &str) -> PathBuf {
+    directory.join(format!("{id}.cache.json"))
+}
+
 fn read_metadata(directory: &Path, id: &str) -> Result<StoredBook, String> {
     serde_json::from_slice(
         &fs::read(metadata_path(directory, id)).map_err(|error| error.to_string())?,
@@ -152,6 +156,7 @@ fn remove_book(app: AppHandle, id: String) -> Result<(), String> {
     for path in [
         directory.join(format!("{id}.epub")),
         directory.join(format!("{id}.pdf")),
+        cache_path(&directory, &id),
         metadata_path(&directory, &id),
     ] {
         match fs::remove_file(path) {
@@ -214,6 +219,25 @@ fn update_book_bookmarks(
     .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn read_book_cache(app: AppHandle, id: String) -> Result<Option<String>, String> {
+    validate_id(&id)?;
+    let path = cache_path(&library_dir(&app)?, &id);
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn write_book_cache(app: AppHandle, id: String, data: String) -> Result<(), String> {
+    validate_id(&id)?;
+    let directory = library_dir(&app)?;
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    fs::write(cache_path(&directory, &id), data).map_err(|error| error.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -225,7 +249,9 @@ pub fn run() {
             remove_book,
             update_book_progress,
             update_book_thumbnail,
-            update_book_bookmarks
+            update_book_bookmarks,
+            read_book_cache,
+            write_book_cache
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -111,6 +111,8 @@ npm run tauri build -- --target universal-apple-darwin
   your Mac. Use the sidebar to reopen a book, resume its last page, or remove it.
 - **Bookmarks**: open a book and use the bookmark button to save the visible PDF
   page or EPUB section. Saved bookmarks appear in the jump menu and thumbnail rail.
+- **Themes**: use the header button to switch between dark and light mode. The
+  selected theme is restored the next time the app opens.
 - **CORS / networking**: in the Tauri app, requests go through the HTTP plugin
   (allowed for `localhost:8880` in `src-tauri/capabilities/default.json`). The
   same front-end also runs in a plain browser via `fetch` if you just open
