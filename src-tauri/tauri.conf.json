@@ -16,6 +16,7 @@
         "minHeight": 500
       }
     ],
+    "withGlobalTauri": true,
     "security": {
       "csp": "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:8880 https://cdnjs.cloudflare.com; media-src 'self' blob:; worker-src 'self' blob: https://cdnjs.cloudflare.com"
     }

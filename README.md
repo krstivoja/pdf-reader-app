@@ -3,7 +3,8 @@
 A local audiobook player: drag in a PDF, pick a voice, and it reads the book
 aloud using **Kokoro** TTS running on your machine. No cloud, no tokens, no
 uploads. PDF text is extracted in-app with pdf.js; speech comes from a local
-Kokoro server.
+Kokoro server. Imported PDFs are kept in a local library for quick switching,
+with reading progress saved per book.
 
 Built with **Tauri v2** (tiny native macOS app, ~3–5 MB) wrapping an
 HTML/JS front-end.
@@ -103,6 +104,8 @@ npm run tauri build -- --target universal-apple-darwin
   sign it with an Apple Developer ID if you plan to distribute.
 - **Voices**: the dropdown auto-populates from Kokoro's `/v1/audio/voices`. The
   `af_*` voices are American female, `am_*` American male, `bf_*`/`bm_*` British.
+- **Local library**: imported PDFs are copied into the app-data directory on
+  your Mac. Use the sidebar to reopen a book, resume its last page, or remove it.
 - **CORS / networking**: in the Tauri app, requests go through the HTTP plugin
   (allowed for `localhost:8880` in `src-tauri/capabilities/default.json`). The
   same front-end also runs in a plain browser via `fetch` if you just open

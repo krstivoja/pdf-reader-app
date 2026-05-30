@@ -32,6 +32,26 @@
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.primary { background: var(--accent); color: #06223f; border-color: var(--accent); font-weight: 600; }
   main { flex: 1; display: flex; overflow: hidden; }
+  #library {
+    width: 238px; flex: 0 0 238px; padding: 14px 10px; border-right: 1px solid var(--line);
+    background: var(--panel); overflow-y: auto;
+  }
+  .library-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 12px; }
+  .library-title { color: var(--muted); font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+  .library-title span { color: var(--accent); }
+  #addPdf { padding: 4px 8px; font-size: 12px; }
+  .library-empty { padding: 10px 4px; color: var(--muted); font-size: 12px; }
+  .book-row { display: flex; margin-bottom: 5px; border: 1px solid transparent; border-radius: 8px; }
+  .book-row:hover { border-color: var(--line); }
+  .book-row.active { border-color: var(--accent); background: #6ea8fe12; }
+  .book-open {
+    min-width: 0; flex: 1; padding: 9px 8px; border: 0; background: transparent; text-align: left;
+  }
+  .book-open strong, .book-open span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .book-open strong { color: var(--ink); font-size: 13px; }
+  .book-open span { margin-top: 3px; color: var(--muted); font-size: 11px; }
+  .book-remove { align-self: center; padding: 2px 6px; border: 0; background: transparent; color: var(--muted); font-size: 18px; }
+  .book-remove:hover { color: var(--warn); }
   #drop {
     flex: 1; margin: 18px; border: 2px dashed var(--line); border-radius: 14px;
     display: flex; align-items: center; justify-content: center; flex-direction: column;
@@ -39,9 +59,23 @@
   }
   #drop.drag { border-color: var(--accent); background: #6ea8fe11; color: var(--ink); }
   #drop.hidden { display: none; }
-  #reader { flex: 1; overflow-y: auto; padding: 28px 36px; display: none; }
-  #reader.show { display: block; }
-  #text { max-width: 760px; margin: 0 auto; }
+  #reader { flex: 1; min-width: 0; display: none; flex-direction: column; overflow: hidden; }
+  #reader.show { display: flex; }
+  .reader-nav {
+    padding: 10px 18px; border-bottom: 1px solid var(--line); display: flex;
+    gap: 10px; align-items: center; justify-content: center; background: var(--panel);
+  }
+  .reader-nav select { max-width: 280px; margin-left: 10px; }
+  .page-count { min-width: 92px; color: var(--muted); text-align: center; font-size: 13px; }
+  #pageScroll { flex: 1; overflow-y: auto; padding: 28px 36px; }
+  #text { max-width: 820px; margin: 0 auto; }
+  .book-page {
+    min-height: 100%; padding: 42px 52px; border: 1px solid var(--line);
+    border-radius: 8px; background: #14171d; box-shadow: 0 8px 30px #00000024;
+  }
+  .page-kicker { margin-bottom: 28px; color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .chapter-heading { margin: 0 0 24px; color: var(--ink); font-size: 26px; line-height: 1.25; }
+  .book-page p { margin: 0 0 16px; }
   .sent { padding: 1px 2px; border-radius: 3px; transition: background .1s; }
   .sent.active { background: var(--accent); color: #06223f; }
   .row { display: flex; gap: 8px; align-items: center; }
@@ -66,13 +100,28 @@
   <div class="status" id="status">Checking Kokoro…</div>
 </header>
 <main>
+  <aside id="library">
+    <div class="library-head">
+      <div class="library-title">Library <span id="libraryCount">0</span></div>
+      <button id="addPdf">+ Add</button>
+    </div>
+    <div id="bookList"><div class="library-empty">Imported PDFs will appear here.</div></div>
+  </aside>
   <div id="drop">
     <div style="font-size:42px">⬇</div>
     <div style="font-size:18px;color:var(--ink)">Drag &amp; drop a PDF here</div>
     <div>or click to choose · text extracted locally, nothing uploaded</div>
     <input type="file" id="file" accept="application/pdf" hidden>
   </div>
-  <div id="reader"><div id="text"></div></div>
+  <div id="reader">
+    <div class="reader-nav">
+      <button id="prevPage" disabled>‹ Prev</button>
+      <span class="page-count">Page <strong id="pageCurrent">0</strong> / <span id="pageTotal">0</span></span>
+      <button id="nextPage" disabled>Next ›</button>
+      <select id="chapter" title="Jump to chapter" disabled><option>No chapters detected</option></select>
+    </div>
+    <div id="pageScroll"><div id="text"></div></div>
+  </div>
 </main>
 <script type="module" src="./app.js"></script>
 </body>
