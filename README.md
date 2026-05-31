@@ -1,5 +1,8 @@
 # PDF + EPUB Reader (Mac app)
 
+<img width="2946" height="2568" alt="Screenshot 2026-05-31 at 08 24 23" src="https://github.com/user-attachments/assets/0d0d2221-0237-408e-8984-5a7fc1b2fdef" />
+
+
 A local audiobook player: drag in a PDF or EPUB, pick a voice, and it reads the book
 aloud using **Kokoro** TTS running on your machine. No cloud, no tokens, no
 uploads, no Docker. PDF text is extracted in-app with pdf.js; EPUB text is extracted
