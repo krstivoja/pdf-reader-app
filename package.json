@@ -1,6 +1,6 @@
 {
   "name": "pdf-reader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local PDF and EPUB audiobook reader powered by Kokoro TTS",
   "type": "module",
   "scripts": {

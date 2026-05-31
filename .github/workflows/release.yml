@@ -1,0 +1,65 @@
+name: Release
+
+# Fires when a tag like 0.1.1, 1.2.3, etc. is pushed. No "v" prefix.
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build + publish DMG (Apple Silicon)
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache cargo registry + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Install npm dependencies
+        run: npm ci || npm install
+
+      - name: Fetch TTS model and voices
+        run: npm run setup
+
+      - name: Build Tauri app
+        run: npm run build
+
+      - name: Locate built DMG
+        id: dmg
+        run: |
+          path="$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)"
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "Found DMG: $path"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: ${{ steps.dmg.outputs.path }}
