@@ -3,7 +3,10 @@
 Download latest:
 https://github.com/krstivoja/pdf-reader-app/releases/latest
 
-<img width="2946" height="2568" alt="Screenshot 2026-05-31 at 08 24 23" src="https://github.com/user-attachments/assets/0d0d2221-0237-408e-8984-5a7fc1b2fdef" />
+<img width="4238" height="2590" alt="Screenshot 2026-05-31 at 09 01 08" src="https://github.com/user-attachments/assets/44730e1b-8a89-4bc7-a6bc-759b49351a3a" />
+<img width="4238" height="2590" alt="Screenshot 2026-05-31 at 09 01 05" src="https://github.com/user-attachments/assets/c6d813f9-5efa-4838-b169-72ef07e42228" />
+<img width="4238" height="2590" alt="Screenshot 2026-05-31 at 09 00 59" src="https://github.com/user-attachments/assets/e77547c2-b18c-4b03-80e4-9b57474c43d6" />
+<img width="4238" height="2590" alt="Screenshot 2026-05-31 at 09 00 55" src="https://github.com/user-attachments/assets/b5f71ee2-c358-4a93-a58f-086148a7c726" />
 
 
 A local audiobook player: drag in a PDF or EPUB, pick a voice, and it reads the book
