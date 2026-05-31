@@ -29,6 +29,10 @@
     --danger: #E08878;
     --highlight-bg: #FFD680;
     --highlight-fg: #1A1611;
+    /* Ambient washes — overridden per theme. Default is warm amber + sage. */
+    --ambient-warm: rgba(231, 178, 107, 0.045);
+    --ambient-cool: rgba(151, 166, 135, 0.035);
+    --ambient-reader: rgba(231, 178, 107, 0.03);
     /* Font pairings (overridden by data-font on :root) */
     --reader-size: 17px;
     --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "Segoe UI", sans-serif;
@@ -72,6 +76,7 @@
     --accent: #1F1F24; --accent-warm: #2E2E36; --accent-deep: #000; --accent-bright: #FFE066;
     --accent-soft: rgba(20,20,24,0.06); --accent-line: rgba(20,20,24,0.18);
     --highlight-bg: #FFE066; --highlight-fg: #14141A;
+    --ambient-warm: transparent; --ambient-cool: transparent; --ambient-reader: transparent;
   }
   :root[data-theme="slate"] {
     color-scheme: dark;
@@ -81,6 +86,7 @@
     --accent: #E5E5EA; --accent-warm: #F4F4F8; --accent-deep: #B0B0B8; --accent-bright: #FFE066;
     --accent-soft: rgba(229,229,234,0.10); --accent-line: rgba(229,229,234,0.24);
     --highlight-bg: #FFE066; --highlight-fg: #16161A;
+    --ambient-warm: transparent; --ambient-cool: transparent; --ambient-reader: transparent;
   }
   :root[data-theme="dracula"] {
     color-scheme: dark;
@@ -91,16 +97,9 @@
     --accent-soft: rgba(255,121,198,0.14); --accent-line: rgba(255,121,198,0.34);
     --highlight-bg: #F1FA8C; --highlight-fg: #282A36;
   }
-  /* Legacy "light" maps to paper for any code referencing the old name */
-  :root[data-mode="light"] {
-    color-scheme: light;
-    --ink-0: #FBF6EC; --ink-1: #F4ECDB; --ink-2: #ECE2CA; --ink-3: #E0D4B7; --ink-4: #D5C7A4;
-    --line: rgba(28,22,14,0.12); --line-strong: rgba(28,22,14,0.22);
-    --paper: #1A1611; --paper-soft: #2E2820; --paper-muted: #58503F; --paper-faint: #7E7561;
-    --accent: #A66A1E; --accent-warm: #B97A2A; --accent-deep: #7A4B12; --accent-bright: #FFE38A;
-    --accent-soft: rgba(166,106,30,0.12); --accent-line: rgba(166,106,30,0.38);
-    --highlight-bg: #FFE38A; --highlight-fg: #1A1611;
-  }
+  /* data-mode="light" only sets color-scheme — colors come from the
+     per-theme rule above so each light theme stays distinct. */
+  :root[data-mode="light"] { color-scheme: light; }
 
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; padding: 0; }
@@ -126,8 +125,8 @@
     display: flex;
     flex-direction: column;
     background:
-      radial-gradient(900px 600px at 80% -10%, rgba(231,178,107,0.045), transparent 60%),
-      radial-gradient(700px 500px at -5% 110%, rgba(151,166,135,0.035), transparent 60%),
+      radial-gradient(900px 600px at 80% -10%, var(--ambient-warm), transparent 60%),
+      radial-gradient(700px 500px at -5% 110%, var(--ambient-cool), transparent 60%),
       var(--ink-0);
   }
 
@@ -472,8 +471,12 @@
     border-radius: 7px;
     font-size: 18px;
     line-height: 1;
-    transition: color 0.15s, background 0.15s;
+    opacity: 0;
+    transition: opacity 0.15s, color 0.15s, background 0.15s;
   }
+  .book-row:hover .book-remove,
+  .book-row:focus-within .book-remove,
+  .book-remove:focus-visible { opacity: 1; }
   .book-remove:hover { color: var(--danger); background: rgba(216,126,110,0.1); }
 
   .book-bookmarks {
@@ -807,7 +810,7 @@
     overflow-y: auto;
     padding: 56px 60px 36px;
     background:
-      radial-gradient(700px 500px at 20% 0%, rgba(231,178,107,0.03), transparent 60%),
+      radial-gradient(700px 500px at 20% 0%, var(--ambient-reader), transparent 60%),
       linear-gradient(180deg, var(--ink-1), var(--ink-0));
   }
   #text { max-width: 720px; margin: 0 auto; }
@@ -960,29 +963,29 @@
   :root[data-mode="light"] body { background: var(--ink-0); color: var(--paper); }
   :root[data-mode="light"] .app-shell {
     background:
-      radial-gradient(900px 600px at 80% -10%, rgba(198,135,62,0.05), transparent 60%),
-      radial-gradient(700px 500px at -5% 110%, rgba(151,166,135,0.05), transparent 60%),
+      radial-gradient(900px 600px at 80% -10%, var(--ambient-warm), transparent 60%),
+      radial-gradient(700px 500px at -5% 110%, var(--ambient-cool), transparent 60%),
       var(--ink-0);
   }
   :root[data-mode="light"] .topbar {
-    background: linear-gradient(180deg, rgba(245,239,227,0.85), rgba(239,232,218,0.85));
+    background: color-mix(in srgb, var(--ink-1) 85%, transparent);
     border-bottom-color: var(--line-strong);
   }
   :root[data-mode="light"] #library {
-    background: linear-gradient(180deg, rgba(245,239,227,0.6), rgba(251,246,236,0.6));
+    background: color-mix(in srgb, var(--ink-1) 60%, transparent);
     border-right-color: var(--line-strong);
   }
   :root[data-mode="light"] .reader-nav {
-    background: rgba(245,239,227,0.7);
+    background: color-mix(in srgb, var(--ink-1) 70%, transparent);
     border-bottom-color: var(--line-strong);
   }
   :root[data-mode="light"] #thumbnails {
-    background: rgba(239,232,218,0.6);
+    background: color-mix(in srgb, var(--ink-2) 60%, transparent);
     border-right-color: var(--line-strong);
   }
   :root[data-mode="light"] #pageScroll {
     background:
-      radial-gradient(700px 500px at 20% 0%, rgba(198,135,62,0.05), transparent 60%),
+      radial-gradient(700px 500px at 20% 0%, var(--ambient-reader), transparent 60%),
       linear-gradient(180deg, var(--ink-1), var(--ink-0));
   }
   :root[data-mode="light"] .scrubber {
@@ -1056,15 +1059,15 @@
   :root[data-mode="light"] .topbar-divider { background: var(--line-strong); }
 
   /* === Settings panel === */
+  /* Click-outside catcher — invisible, so the live reader stays a preview */
   .settings-scrim {
-    position: fixed; inset: 0;
-    background: rgba(0,0,0,0.35);
-    opacity: 0;
+    position: fixed;
+    top: 56px; left: 0; bottom: 0; right: 380px;
+    background: transparent;
     pointer-events: none;
-    transition: opacity 0.2s;
     z-index: 80;
   }
-  .settings-scrim.show { opacity: 1; pointer-events: auto; }
+  .settings-scrim.show { pointer-events: auto; }
 
   .settings-panel {
     position: fixed;

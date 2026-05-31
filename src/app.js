@@ -1185,6 +1185,37 @@ function closeSettings() {
   $("settingsPanel").setAttribute("aria-hidden", "true");
 }
 $("openSettings").onclick = openSettings;
+
+// Make the entire topbar a window-drag handle (Tauri's auto data-attribute
+// detection is unreliable for label/div children). Skip if the user clicked
+// on an actual interactive control.
+(function wireTopbarDrag() {
+  const topbar = document.querySelector(".topbar");
+  if (!topbar) return;
+  const interactive = "button, a, select, input, textarea, [role='button'], [contenteditable]";
+  topbar.addEventListener("mousedown", async (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest(interactive)) return;
+    try {
+      const api = window.__TAURI__?.window;
+      if (api?.getCurrentWindow) {
+        await api.getCurrentWindow().startDragging();
+      } else if (api?.getCurrent) {
+        await api.getCurrent().startDragging();
+      }
+    } catch (error) {
+      console.warn("startDragging failed:", error);
+    }
+  });
+  topbar.addEventListener("dblclick", async (event) => {
+    if (event.target.closest(interactive)) return;
+    try {
+      const win = window.__TAURI__?.window?.getCurrentWindow?.()
+                 ?? window.__TAURI__?.window?.getCurrent?.();
+      if (win) await win.toggleMaximize();
+    } catch { /* not running under Tauri */ }
+  });
+})();
 $("closeSettings").onclick = closeSettings;
 $("settingsScrim").onclick = closeSettings;
 
