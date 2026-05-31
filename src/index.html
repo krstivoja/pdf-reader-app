@@ -1137,13 +1137,13 @@
     justify-content: center;
     gap: 6px;
     padding: 16px 10px;
-    background: var(--ink-2);
+    background: transparent;
     border: 1.5px solid var(--line);
     border-radius: 12px;
     color: var(--paper-soft);
-    transition: border-color 0.15s, background 0.15s;
+    transition: border-color 0.15s;
   }
-  .font-card:hover { background: var(--ink-3); }
+  .font-card:hover { border-color: var(--line-strong); }
   .font-card.active {
     border-color: var(--accent);
     color: var(--paper);
@@ -1203,10 +1203,12 @@
     justify-content: center;
     gap: 8px;
     padding: 16px 10px;
+    background: transparent;
     border: 1.5px solid var(--line);
     border-radius: 12px;
     transition: border-color 0.15s;
   }
+  .theme-card:hover { border-color: var(--line-strong); }
   .theme-card.active { border-color: var(--accent); }
   .theme-card .swatch {
     display: flex;
@@ -1225,20 +1227,13 @@
     letter-spacing: 0.01em;
   }
   .theme-card.active small { color: var(--paper); }
-  .theme-card[data-theme-pick="ink"] { background: rgba(14,12,10,0.4); }
-  .theme-card[data-theme-pick="ink"] .swatch { background: #0E0C0A; color: #F8F2E4; }
-  .theme-card[data-theme-pick="paper"] { background: rgba(251,246,236,0.06); }
-  .theme-card[data-theme-pick="paper"] .swatch { background: #FBF6EC; color: #1A1611; }
-  .theme-card[data-theme-pick="sepia"] { background: rgba(241,227,200,0.08); }
-  .theme-card[data-theme-pick="sepia"] .swatch { background: #F1E3C8; color: #2B1F10; }
-  .theme-card[data-theme-pick="midnight"] { background: rgba(10,14,24,0.4); }
+  .theme-card[data-theme-pick="ink"]      .swatch { background: #0E0C0A; color: #F8F2E4; }
+  .theme-card[data-theme-pick="paper"]    .swatch { background: #FBF6EC; color: #1A1611; }
+  .theme-card[data-theme-pick="sepia"]    .swatch { background: #F1E3C8; color: #2B1F10; }
   .theme-card[data-theme-pick="midnight"] .swatch { background: #0A0E18; color: #DCE4F7; }
-  .theme-card[data-theme-pick="cloud"] { background: rgba(255,255,255,0.06); }
-  .theme-card[data-theme-pick="cloud"] .swatch { background: #FFFFFF; color: #14141A; }
-  .theme-card[data-theme-pick="slate"] { background: rgba(22,22,26,0.5); }
-  .theme-card[data-theme-pick="slate"] .swatch { background: #16161A; color: #F2F2F4; }
-  .theme-card[data-theme-pick="dracula"] { background: rgba(40,42,54,0.5); }
-  .theme-card[data-theme-pick="dracula"] .swatch { background: #282A36; color: #FF79C6; }
+  .theme-card[data-theme-pick="cloud"]    .swatch { background: #FFFFFF; color: #14141A; }
+  .theme-card[data-theme-pick="slate"]    .swatch { background: #16161A; color: #F2F2F4; }
+  .theme-card[data-theme-pick="dracula"]  .swatch { background: #282A36; color: #FF79C6; }
 
   /* Sub-heading inside the theme section */
   .settings-subgroup {
