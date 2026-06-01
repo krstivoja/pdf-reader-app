@@ -86,6 +86,10 @@ if (!invoke) {
 
 const LIBRARY_STORE = "pdfs";
 let library = [], activeBookId = null, progressTimer = null;
+let currentPdfDoc = null, currentPdfBookId = null;     // kept around so we can render page images
+let currentBookFormat = "pdf";
+let showPageImage = JSON.parse(localStorage.getItem("pdf-reader-show-page-image") || "false");
+let pageImageRenderToken = 0;
 const thumbnailJobs = new Set();
 const bookmarkLabels = new Map();
 const BOOK_FORMATS = {
@@ -654,6 +658,7 @@ function addReaderPage({ number, label, blocks, thumbnail }) {
 
 function finishBookLoad(book, unit) {
   readerUnit = unit;
+  currentBookFormat = getBookFormat(book);
   $("pageUnit").textContent = unit;
   $("search").disabled = false;
   $("search").value = "";
@@ -670,6 +675,7 @@ function finishBookLoad(book, unit) {
   $("drop").classList.add("hidden");
   $("reader").classList.add("show");
   $("play").disabled = !sentences.length;
+  updatePageImageButton();
   statusEl.textContent = `${book.name || "Book"} · ${pages.length} ${unit.toLowerCase()}s · ${chapters.length} chapters`;
   statusEl.className = "status-pill is-ok";
 }
@@ -754,6 +760,8 @@ async function loadPDFBytes(buf, book = {}) {
   statusEl.textContent = "Extracting text…";
   statusEl.className = "status-pill is-loading";
   const pdf = await pdfjs.getDocument({ data: buf }).promise;
+  currentPdfDoc = pdf;
+  currentPdfBookId = book.id || null;
   activeBookId = book.id || null;
   sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
   for (let p = 1; p <= pdf.numPages; p++) {
@@ -891,6 +899,65 @@ function renderPage(pageIndex) {
   $("chapter").value = chapterIndex >= 0 ? String(chapterIndex) : "";
   queueProgressUpdate();
   updateScrubber();
+  if (showPageImage && currentBookFormat === "pdf") schedulePageImageRender(page.number);
+}
+
+async function ensurePdfDocFor(book) {
+  if (currentPdfDoc && currentPdfBookId === book.id) return currentPdfDoc;
+  if (!book?.id) return null;
+  try {
+    const bytes = await readStoredBook(book.id);
+    currentPdfDoc = await pdfjs.getDocument({ data: bytes }).promise;
+    currentPdfBookId = book.id;
+    return currentPdfDoc;
+  } catch (error) {
+    console.error("Could not load PDF for image view:", error);
+    return null;
+  }
+}
+
+function schedulePageImageRender(pageNumber) {
+  const token = ++pageImageRenderToken;
+  renderPageImage(pageNumber, token);
+}
+
+async function renderPageImage(pageNumber, token) {
+  const canvas = $("pageImageCanvas");
+  if (!canvas) return;
+  const book = activeBook();
+  let doc = currentPdfDoc && currentPdfBookId === activeBookId ? currentPdfDoc : null;
+  if (!doc && book) doc = await ensurePdfDocFor(book);
+  if (token !== pageImageRenderToken) return;
+  if (!doc || pageNumber < 1 || pageNumber > doc.numPages) {
+    canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+  const page = await doc.getPage(pageNumber);
+  if (token !== pageImageRenderToken) return;
+  // Render at 2x device pixels for crisp output, then let CSS scale to the
+  // container width.
+  const baseViewport = page.getViewport({ scale: 1 });
+  const targetWidth = canvas.parentElement.clientWidth || 360;
+  const scale = (targetWidth / baseViewport.width) * (window.devicePixelRatio || 1) * 1.25;
+  const viewport = page.getViewport({ scale });
+  canvas.width = Math.ceil(viewport.width);
+  canvas.height = Math.ceil(viewport.height);
+  canvas.style.aspectRatio = `${baseViewport.width} / ${baseViewport.height}`;
+  const ctx = canvas.getContext("2d");
+  await page.render({ canvasContext: ctx, viewport }).promise;
+}
+
+function updatePageImageButton() {
+  const btn = $("pageImageToggle");
+  if (!btn) return;
+  const supported = currentBookFormat === "pdf";
+  btn.disabled = !supported;
+  btn.dataset.on = showPageImage && supported ? "true" : "false";
+  const wrapper = $("pageLayout");
+  if (wrapper) wrapper.classList.toggle("show-image", showPageImage && supported);
+  if (showPageImage && supported && pages[currentPage]) {
+    schedulePageImageRender(pages[currentPage].number);
+  }
 }
 
 function renderChapters() {
@@ -1043,6 +1110,14 @@ function resetReader() {
   clearTimeout(progressTimer);
   progressTimer = null;
   activeBookId = null;
+  currentPdfDoc = null;
+  currentPdfBookId = null;
+  pageImageRenderToken++;
+  $("pageImageToggle").disabled = true;
+  $("pageImageToggle").dataset.on = "false";
+  $("pageLayout")?.classList.remove("show-image");
+  const cv = $("pageImageCanvas");
+  if (cv) cv.getContext("2d").clearRect(0, 0, cv.width, cv.height);
   idx = 0; sentences = []; sentencePages = []; pages = []; chapters = []; currentPage = 0;
   readerUnit = "Page";
   $("pageUnit").textContent = readerUnit;
@@ -1185,6 +1260,12 @@ function closeSettings() {
   $("settingsPanel").setAttribute("aria-hidden", "true");
 }
 $("openSettings").onclick = openSettings;
+
+$("pageImageToggle").onclick = () => {
+  showPageImage = !showPageImage;
+  localStorage.setItem("pdf-reader-show-page-image", JSON.stringify(showPageImage));
+  updatePageImageButton();
+};
 
 // Make the entire topbar a window-drag handle (Tauri's auto data-attribute
 // detection is unreliable for label/div children). Skip if the user clicked
